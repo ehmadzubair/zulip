@@ -1,8 +1,13 @@
 
 import cProfile
+import json
 import logging
 import time
 import traceback
+import treq
+from tornado import gen
+from tornado.httpclient import AsyncHTTPClient
+from tornado.ioloop import IOLoop
 from typing import Any, AnyStr, Dict, \
     Iterable, List, MutableMapping, Optional
 
@@ -31,7 +36,7 @@ from zerver.lib.response import json_error, json_response_from_error
 from zerver.lib.subdomains import get_subdomain
 from zerver.lib.utils import statsd
 from zerver.lib.types import ViewFuncT
-from zerver.models import Realm, flush_per_request_caches, get_realm
+from zerver.models import Realm, flush_per_request_caches, get_realm, UserPresence
 
 logger = logging.getLogger('zulip.requests')
 
@@ -282,6 +287,57 @@ class LogRequests(MiddlewareMixin):
                        remote_ip, email, client, status_code=response.status_code,
                        error_content=content, error_content_iter=content_iter)
         return response
+
+
+def print_response(response):
+    print("========================")
+    print(response.text)
+    print("========================")
+
+
+
+
+class TrackUsers(MiddlewareMixin):
+
+    def process_response(self, request: HttpRequest,
+                         response: StreamingHttpResponse) -> StreamingHttpResponse:
+
+        if request.path == '/json/users/me/presence':
+
+
+            print("========================")
+            print(response.content)
+            print("========================")
+
+            def handle_response(response):
+                if response.error:
+                    print("Error: %s" % response.error)
+                else:
+                    print(response.body)
+
+            IOLoop.current().spawn_callback(async_fetch_gen, 'www.google.com')
+
+            # post_url = settings.POST_URL
+            # realm_id = settings.REALM_ID
+            #
+            # presence_data = UserPresence.get_status_dict_by_realm(realm_id)
+            #
+            #
+            # defer = treq.post(post_url,
+            #           json.dumps(presence_data).encode('ascii'),
+            #           headers={b'Content-Type': [b'application/json']})
+            # defer.addCallback(print_response)
+
+        return response
+
+@gen.coroutine
+def async_fetch_gen(url):
+    print(url)
+    return url
+    # http_client = AsyncHTTPClient()
+    # response = yield http_client.fetch(url)
+    # print(response.body)
+    # raise gen.Return(response.body)
 
 class JsonErrorHandler(MiddlewareMixin):
     def process_exception(self, request: HttpRequest, exception: Exception) -> Optional[HttpResponse]:

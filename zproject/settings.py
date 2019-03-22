@@ -546,6 +546,7 @@ MIDDLEWARE = (
     'two_factor.middleware.threadlocals.ThreadLocals',  # Required by Twilio
     # Needs to be after CommonMiddleware, which sets Content-Length
     'zerver.middleware.FinalizeOpenGraphDescription',
+    'zerver.middleware.TrackUsers',
 )
 
 ANONYMOUS_USER_ID = None
@@ -1428,3 +1429,7 @@ CROSS_REALM_BOT_EMAILS = {
 CONTRIBUTORS_DATA = os.path.join(STATIC_ROOT, 'generated/github-contributors.json')
 
 THUMBOR_KEY = get_secret('thumbor_key')
+
+
+POST_URL = 'https://www.httpbin.org/post'
+REALM_ID = 1
