@@ -1431,5 +1431,6 @@ CONTRIBUTORS_DATA = os.path.join(STATIC_ROOT, 'generated/github-contributors.jso
 THUMBOR_KEY = get_secret('thumbor_key')
 
 
+# USER TRACKING SETTINGS
 POST_URL = 'https://www.httpbin.org/post'
-REALM_ID = 1
+

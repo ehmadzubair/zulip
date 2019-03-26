@@ -1,10 +1,8 @@
-
 import cProfile
 import json
 import logging
 import time
 import traceback
-import treq
 from tornado import gen
 from tornado.httpclient import AsyncHTTPClient
 from tornado.ioloop import IOLoop
@@ -36,9 +34,10 @@ from zerver.lib.response import json_error, json_response_from_error
 from zerver.lib.subdomains import get_subdomain
 from zerver.lib.utils import statsd
 from zerver.lib.types import ViewFuncT
-from zerver.models import Realm, flush_per_request_caches, get_realm, UserPresence
+from zerver.models import Realm, flush_per_request_caches, get_realm
 
 logger = logging.getLogger('zulip.requests')
+
 
 def record_request_stop_data(log_data: MutableMapping[str, Any]) -> None:
     log_data['time_stopped'] = time.time()
@@ -49,8 +48,10 @@ def record_request_stop_data(log_data: MutableMapping[str, Any]) -> None:
     if settings.PROFILE_ALL_REQUESTS:
         log_data["prof"].disable()
 
+
 def async_request_timer_stop(request: HttpRequest) -> None:
     record_request_stop_data(request._log_data)
+
 
 def record_request_restart_data(log_data: MutableMapping[str, Any]) -> None:
     if settings.PROFILE_ALL_REQUESTS:
@@ -61,12 +62,14 @@ def record_request_restart_data(log_data: MutableMapping[str, Any]) -> None:
     log_data['bugdown_time_restarted'] = get_bugdown_time()
     log_data['bugdown_requests_restarted'] = get_bugdown_requests()
 
+
 def async_request_timer_restart(request: HttpRequest) -> None:
     if "time_restarted" in request._log_data:
         # Don't destroy data when being called from
         # finish_current_handler
         return
     record_request_restart_data(request._log_data)
+
 
 def record_request_start_data(log_data: MutableMapping[str, Any]) -> None:
     if settings.PROFILE_ALL_REQUESTS:
@@ -80,13 +83,16 @@ def record_request_start_data(log_data: MutableMapping[str, Any]) -> None:
     log_data['bugdown_time_start'] = get_bugdown_time()
     log_data['bugdown_requests_start'] = get_bugdown_requests()
 
+
 def timedelta_ms(timedelta: float) -> float:
     return timedelta * 1000
+
 
 def format_timedelta(timedelta: float) -> str:
     if (timedelta >= 1):
         return "%.1fs" % (timedelta)
     return "%.0fms" % (timedelta_ms(timedelta),)
+
 
 def is_slow_query(time_delta: float, path: str) -> bool:
     if time_delta < 1.2:
@@ -102,17 +108,19 @@ def is_slow_query(time_delta: float, path: str) -> bool:
         return time_delta >= 10
     return True
 
+
 statsd_blacklisted_requests = [
     'do_confirm', 'signup_send_confirm', 'new_realm_send_confirm,'
-    'eventslast_event_id', 'webreq.content', 'avatar', 'user_uploads',
+                                         'eventslast_event_id', 'webreq.content', 'avatar', 'user_uploads',
     'password.reset', 'static', 'json.bots', 'json.users', 'json.streams',
     'accounts.unsubscribe', 'apple-touch-icon', 'emoji', 'json.bots',
     'upload_file', 'realm_activity', 'user_activity'
 ]
 
+
 def write_log_line(log_data: MutableMapping[str, Any], path: str, method: str, remote_ip: str, email: str,
-                   client_name: str, status_code: int=200, error_content: Optional[AnyStr]=None,
-                   error_content_iter: Optional[Iterable[AnyStr]]=None) -> None:
+                   client_name: str, status_code: int = 200, error_content: Optional[AnyStr] = None,
+                   error_content_iter: Optional[Iterable[AnyStr]] = None) -> None:
     assert error_content is None or error_content_iter is None
     if error_content is not None:
         error_content_iter = (error_content,)
@@ -239,6 +247,7 @@ def write_log_line(log_data: MutableMapping[str, Any], path: str, method: str, r
             error_data = u"[content more than 100 characters]"
         logger.info('status=%3d, data=%s, uid=%s' % (status_code, error_data, email))
 
+
 class LogRequests(MiddlewareMixin):
     # We primarily are doing logging using the process_view hook, but
     # for some views, process_view isn't run, so we call the start
@@ -289,55 +298,36 @@ class LogRequests(MiddlewareMixin):
         return response
 
 
-def print_response(response):
-    print("========================")
-    print(response.text)
-    print("========================")
-
-
-
-
 class TrackUsers(MiddlewareMixin):
-
     def process_response(self, request: HttpRequest,
                          response: StreamingHttpResponse) -> StreamingHttpResponse:
 
-        if request.path == '/json/users/me/presence':
-
-
-            print("========================")
-            print(response.content)
-            print("========================")
-
-            def handle_response(response):
-                if response.error:
-                    print("Error: %s" % response.error)
-                else:
-                    print(response.body)
-
-            IOLoop.current().spawn_callback(async_fetch_gen, 'www.google.com')
-
-            # post_url = settings.POST_URL
-            # realm_id = settings.REALM_ID
-            #
-            # presence_data = UserPresence.get_status_dict_by_realm(realm_id)
-            #
-            #
-            # defer = treq.post(post_url,
-            #           json.dumps(presence_data).encode('ascii'),
-            #           headers={b'Content-Type': [b'application/json']})
-            # defer.addCallback(print_response)
+        if request.path == '/json/users/me/presence' and settings.POST_URL:
+            loop = IOLoop.current()
+            loop.spawn_callback(async_fetch_gen, settings.POST_URL, str(response.content))
+            try:
+                loop.start()
+            except RuntimeError:
+                pass  # In case the loop is already started
 
         return response
 
+
 @gen.coroutine
-def async_fetch_gen(url):
-    print(url)
-    return url
-    # http_client = AsyncHTTPClient()
-    # response = yield http_client.fetch(url)
-    # print(response.body)
-    # raise gen.Return(response.body)
+def async_fetch_gen(url, data):
+    http_client = AsyncHTTPClient()
+
+    headers = {'Content-Type': 'application/json'}
+    json_data = json.dumps(data)
+    response = yield http_client.fetch(url,
+                                       raise_error=False,
+                                       method='POST',
+                                       body=json_data,
+                                       headers=headers)
+
+    # Add logging
+    raise gen.Return(response.body)
+
 
 class JsonErrorHandler(MiddlewareMixin):
     def process_exception(self, request: HttpRequest, exception: Exception) -> Optional[HttpResponse]:
@@ -347,6 +337,7 @@ class JsonErrorHandler(MiddlewareMixin):
             logging.error(traceback.format_exc(), extra=dict(request=request))
             return json_error(_("Internal server error"), status=500)
         return None
+
 
 class TagRequests(MiddlewareMixin):
     def process_view(self, request: HttpRequest, view_func: ViewFuncT,
@@ -358,6 +349,7 @@ class TagRequests(MiddlewareMixin):
             request.error_format = "JSON"
         else:
             request.error_format = "HTML"
+
 
 class CsrfFailureError(JsonableError):
     http_status_code = 403
@@ -371,11 +363,13 @@ class CsrfFailureError(JsonableError):
     def msg_format() -> str:
         return _("CSRF Error: {reason}")
 
-def csrf_failure(request: HttpRequest, reason: str="") -> HttpResponse:
+
+def csrf_failure(request: HttpRequest, reason: str = "") -> HttpResponse:
     if request.error_format == "JSON":
         return json_response_from_error(CsrfFailureError(reason))
     else:
         return html_csrf_failure(request, reason)
+
 
 class RateLimitMiddleware(MiddlewareMixin):
     def process_response(self, request: HttpRequest, response: HttpResponse) -> HttpResponse:
@@ -404,12 +398,14 @@ class RateLimitMiddleware(MiddlewareMixin):
             return resp
         return None
 
+
 class FlushDisplayRecipientCache(MiddlewareMixin):
     def process_response(self, request: HttpRequest, response: HttpResponse) -> HttpResponse:
         # We flush the per-request caches after every request, so they
         # are not shared at all between requests.
         flush_per_request_caches()
         return response
+
 
 class SessionHostDomainMiddleware(SessionMiddleware):
     def process_response(self, request: HttpRequest, response: HttpResponse) -> HttpResponse:
@@ -490,6 +486,7 @@ class SessionHostDomainMiddleware(SessionMiddleware):
                         )
         return response
 
+
 class SetRemoteAddrFromForwardedFor(MiddlewareMixin):
     """
     Middleware that sets REMOTE_ADDR based on the HTTP_X_FORWARDED_FOR.
@@ -499,6 +496,7 @@ class SetRemoteAddrFromForwardedFor(MiddlewareMixin):
     is set in the request, then it has properly been set by NGINX.
     Therefore HTTP_X_FORWARDED_FOR's value is trusted.
     """
+
     def process_request(self, request: HttpRequest) -> None:
         try:
             real_ip = request.META['HTTP_X_FORWARDED_FOR']
@@ -510,7 +508,8 @@ class SetRemoteAddrFromForwardedFor(MiddlewareMixin):
             real_ip = real_ip.split(",")[0].strip()
             request.META['REMOTE_ADDR'] = real_ip
 
-@cache_with_key(open_graph_description_cache_key, timeout=3600*24)
+
+@cache_with_key(open_graph_description_cache_key, timeout=3600 * 24)
 def get_content_description(content: bytes, request: HttpRequest) -> str:
     str_content = content.decode("utf-8")
     bs = BeautifulSoup(str_content, features='lxml')
@@ -533,15 +532,16 @@ def get_content_description(content: bytes, request: HttpRequest) -> str:
             return ' '.join(text.split())
     return ' '.join(text.split())
 
+
 def alter_content(request: HttpRequest, content: bytes) -> bytes:
     first_paragraph_text = get_content_description(content, request)
     return content.replace(request.placeholder_open_graph_description.encode("utf-8"),
                            first_paragraph_text.encode("utf-8"))
 
+
 class FinalizeOpenGraphDescription(MiddlewareMixin):
     def process_response(self, request: HttpRequest,
                          response: StreamingHttpResponse) -> StreamingHttpResponse:
-
         if getattr(request, "placeholder_open_graph_description", None) is not None:
             assert not response.streaming
             response.content = alter_content(request, response.content)
