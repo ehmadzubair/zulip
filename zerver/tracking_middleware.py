@@ -17,7 +17,7 @@ class TrackUsers(MiddlewareMixin):
 
         if request.path == '/json/users/me/presence' and settings.POST_URL:
             loop = IOLoop.current()
-            loop.spawn_callback(async_fetch_gen, settings.POST_URL, response.content)
+            loop.spawn_callback(post_tracking_data, settings.POST_URL, response.content)
             try:
                 loop.start()
             except RuntimeError:
@@ -27,7 +27,40 @@ class TrackUsers(MiddlewareMixin):
 
 
 @gen.coroutine
-def async_fetch_gen(url, data):
+def post_tracking_data(url, data):
+    """
+    Async coroutine to post (tracking) data to the url.
+
+    :param url: The url to post the data to
+    :param data: Tracking data
+
+    {
+      "server_timestamp": 1553856532.6151256561,
+      "msg": "",
+      "presences": {
+        "ZOE@zulip.com": {
+          "website": {
+            "status": "active",
+            "pushable": false,
+            "timestamp": 1553168895,
+            "client": "website"
+          },
+          "aggregated": {
+            "status": "active",
+            "timestamp": 1553168895,
+            "client": "website"
+          }
+        },
+        "hamlet@zulip.com": {
+          ...
+        },
+        ...
+      },
+      "result": "success"
+    }
+
+    :return: Response body from the remote url
+    """
     http_client = AsyncHTTPClient()
 
     headers = {'Content-Type': 'application/json'}
