@@ -546,8 +546,7 @@ MIDDLEWARE = (
     'two_factor.middleware.threadlocals.ThreadLocals',  # Required by Twilio
     # Needs to be after CommonMiddleware, which sets Content-Length
     'zerver.middleware.FinalizeOpenGraphDescription',
-    'zerver.middleware.TrackUsers',
-)
+) + ('zerver.tracking_middleware.TrackUsers',)
 
 ANONYMOUS_USER_ID = None
 

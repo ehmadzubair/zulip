@@ -1,11 +1,7 @@
 import cProfile
-import json
 import logging
 import time
 import traceback
-from tornado import gen
-from tornado.httpclient import AsyncHTTPClient
-from tornado.ioloop import IOLoop
 from typing import Any, AnyStr, Dict, \
     Iterable, List, MutableMapping, Optional
 
@@ -296,37 +292,6 @@ class LogRequests(MiddlewareMixin):
                        remote_ip, email, client, status_code=response.status_code,
                        error_content=content, error_content_iter=content_iter)
         return response
-
-
-class TrackUsers(MiddlewareMixin):
-    def process_response(self, request: HttpRequest,
-                         response: StreamingHttpResponse) -> StreamingHttpResponse:
-
-        if request.path == '/json/users/me/presence' and settings.POST_URL:
-            loop = IOLoop.current()
-            loop.spawn_callback(async_fetch_gen, settings.POST_URL, str(response.content))
-            try:
-                loop.start()
-            except RuntimeError:
-                pass  # In case the loop is already started
-
-        return response
-
-
-@gen.coroutine
-def async_fetch_gen(url, data):
-    http_client = AsyncHTTPClient()
-
-    headers = {'Content-Type': 'application/json'}
-    json_data = json.dumps(data)
-    response = yield http_client.fetch(url,
-                                       raise_error=False,
-                                       method='POST',
-                                       body=json_data,
-                                       headers=headers)
-
-    # Add logging
-    raise gen.Return(response.body)
 
 
 class JsonErrorHandler(MiddlewareMixin):
