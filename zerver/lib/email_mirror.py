@@ -9,10 +9,11 @@ import email.message as message
 
 from django.conf import settings
 
-from zerver.lib.actions import decode_email_address, get_email_gateway_message_string_from_address, \
-    internal_send_message, internal_send_private_message, \
+from zerver.lib.actions import internal_send_message, internal_send_private_message, \
     internal_send_stream_message, internal_send_huddle_message, \
     truncate_body, truncate_topic
+from zerver.lib.email_mirror_helpers import decode_email_address, \
+    get_email_gateway_message_string_from_address, ZulipEmailForwardError
 from zerver.lib.email_notifications import convert_html_to_markdown
 from zerver.lib.queue import queue_json_publish
 from zerver.lib.redis_utils import get_redis_client
@@ -59,7 +60,6 @@ def log_and_report(email_message: message.Message, error_message: str, debug_inf
     logger.error(scrubbed_error)
     report_to_zulip(scrubbed_error)
 
-
 # Temporary missed message addresses
 
 redis_client = get_redis_client()
@@ -70,7 +70,11 @@ def missed_message_redis_key(token: str) -> str:
 
 
 def is_missed_message_address(address: str) -> bool:
-    msg_string = get_email_gateway_message_string_from_address(address)
+    try:
+        msg_string = get_email_gateway_message_string_from_address(address)
+    except ZulipEmailForwardError:
+        return False
+
     return is_mm_32_format(msg_string)
 
 def is_mm_32_format(msg_string: Optional[str]) -> bool:
@@ -82,9 +86,6 @@ def is_mm_32_format(msg_string: Optional[str]) -> bool:
 
 def get_missed_message_token_from_address(address: str) -> str:
     msg_string = get_email_gateway_message_string_from_address(address)
-
-    if msg_string is None:
-        raise ZulipEmailForwardError('Address not recognized by gateway.')
 
     if not is_mm_32_format(msg_string):
         raise ZulipEmailForwardError('Could not parse missed message address')
@@ -195,9 +196,6 @@ def send_to_missed_message_address(address: str, message: message.Message) -> No
 
 ## Sending the Zulip ##
 
-class ZulipEmailForwardError(Exception):
-    pass
-
 class ZulipEmailForwardUserError(ZulipEmailForwardError):
     pass
 
@@ -291,10 +289,7 @@ def extract_and_upload_attachments(message: message.Message, realm: Realm) -> st
     return "\n".join(attachment_links)
 
 def extract_and_validate(email: str) -> Tuple[Stream, bool]:
-    temp = decode_email_address(email)
-    if temp is None:
-        raise ZulipEmailForwardError("Malformed email recipient " + email)
-    token, show_sender = temp
+    token, show_sender = decode_email_address(email)
 
     try:
         stream = Stream.objects.get(email_token=token)

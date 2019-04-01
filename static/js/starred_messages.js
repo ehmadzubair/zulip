@@ -1,3 +1,5 @@
+var Dict = require('./dict').Dict;
+
 var starred_messages = (function () {
 
 var exports = {};

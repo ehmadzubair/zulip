@@ -3,7 +3,8 @@ Bitbucket. This integration is for the new-style Bitbucket
 webhooks used by the Bitbucket SAAS service.
 
 For the old-style Bitbucket webhooks used by Bitbucket Enterprise,
-click [here](./bitbucket).
+click [here](./bitbucket), and for the new-style webhooks used by
+Bitbucket Server click [here](./bitbucket3).
 
 1. {!create-stream.md!}
 

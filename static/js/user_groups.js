@@ -1,3 +1,5 @@
+var Dict = require('./dict').Dict;
+
 var user_groups = (function () {
 
 var exports = {};

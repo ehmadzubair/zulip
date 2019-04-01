@@ -1,3 +1,13 @@
+require('ts-node').register({
+    project: 'static/js/tsconfig.json',
+    compilerOptions: {
+        typeRoots: ["node_modules/@types", "../../static/js/js_typings"],
+        // We don't have webpack to handle es6 modules here so directly
+        // transpile to CommonJS format.
+        module: "commonjs",
+    },
+});
+
 var path = require('path');
 var fs = require('fs');
 
@@ -17,7 +27,7 @@ global.window = _.extend({}, windowObj, {
     },
 });
 
-global.Dict = require('js/dict');
+global.Dict = require('js/dict').Dict;
 
 // Create a helper function to avoid sneaky delays in tests.
 function immediate(f) {

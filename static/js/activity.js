@@ -1,3 +1,5 @@
+var Dict = require('./dict').Dict;
+
 var activity = (function () {
 var exports = {};
 

@@ -316,6 +316,11 @@ body {
 .help .sidebar a:visited {
     outline: none;
 }
+
+.help .sidebar .simplebar-scrollbar {
+    width: 10px;
+}
+
 .app.help .hamburger {
     display: none;
 }
@@ -1792,6 +1797,20 @@ input.new-organization-button {
 
 .markdown .indicator.grey {
     border: 1px solid hsl(0, 0%, 80%);
+}
+
+.markdown .indicator.grey-line {
+    border: 1px solid hsl(0, 0%, 80%);
+    top: 2px;
+
+    &::after {
+        content: '';
+        background: hsl(0, 0%, 80%);
+        height: 1.5px;
+        width: 6px;
+        display: block;
+        margin: .5px -2px;
+    }
 }
 
 .markdown .indicator.orange {

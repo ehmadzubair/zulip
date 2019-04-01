@@ -1,3 +1,5 @@
+var Dict = require('./dict').Dict;
+
 var stream_list = (function () {
 
 var exports = {};

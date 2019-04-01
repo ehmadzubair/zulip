@@ -1,3 +1,5 @@
+var Dict = require('./dict').Dict;
+
 var narrow_state = (function () {
 
 var exports = {};

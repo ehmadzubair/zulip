@@ -1,3 +1,5 @@
+var Dict = require('./dict').Dict;
+
 var user_status = (function () {
 
 var exports = {};

@@ -73,6 +73,59 @@ $(function () {
         $("#timezone").val(moment.tz.guess());
     }
 
+    // Code in this block will be executed when the /accounts/send_confirm
+    // endpoint is visited i.e. accounts_send_confirm.html is rendered.
+    if ($("[data-page-id='accounts-send-confirm']").length > 0) {
+        $("#resend_email_link").click(function () {
+            $('.resend_confirm').submit();
+        });
+    }
+
+    // Code in this block will be executed when the user visits
+    // /accounts/password/reset i.e. reset.html is rendered.
+    if ($("[data-page-id='reset-password-confirm']").length > 0) {
+        common.autofocus('#id_new_password1');
+    }
+
+    // Code in this block will be executed when the user visits
+    // /accounts/password/reset i.e. reset.html is rendered.
+    if ($("[data-page-id='reset-password']").length > 0) {
+        common.autofocus('#id_email');
+    }
+
+    // Code in this block will be executed when the user visits /new
+    // i.e. create_realm.html is rendered.
+    if ($("[data-page-id='create-realm']").length > 0) {
+        common.autofocus('#email');
+    }
+
+    // Code in this block will be executed when the user visits /register
+    // i.e. accounts_home.html is rendered.
+    if ($("[data-page-id='accounts-home']").length > 0) {
+        common.autofocus('#email');
+
+        if (window.location.hash.substring(0, 1) === "#") {
+            document.email_form.action += window.location.hash;
+        }
+    }
+
+    // Code in this block will be executed when the user is at login page
+    // i.e. login.html is rendered.
+    if ($("[data-page-id='login-page']").length > 0) {
+        if (window.location.hash.substring(0, 1) === "#") {
+            /* We append the location.hash to the formaction so that URL can be
+            preserved after user is logged in. See this:
+            https://stackoverflow.com/questions/5283395/url-hash-is-persisting-between-redirects */
+            var email_formaction = $("#login_form").attr('action');
+            $("#login_form").attr('action', email_formaction + '/' + window.location.hash);
+            $("#google_login_form input[name='next']").attr('value', '/' + window.location.hash);
+            $("#social_login_form input[name='next']").attr('value', '/' + window.location.hash);
+
+            var sso_address = $("#sso-login").attr('href');
+            $("#sso-login").attr('href', sso_address + window.location.hash);
+        }
+    }
+
     $("#send_confirm").validate({
         errorElement: "div",
         errorPlacement: function (error) {

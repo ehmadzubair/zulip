@@ -1,3 +1,5 @@
+var Dict = require('./dict').Dict;
+
 var muting = (function () {
 
 var exports = {};

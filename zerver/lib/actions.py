@@ -8,7 +8,6 @@ import django.db.utils
 from django.db.models import Count
 from django.contrib.contenttypes.models import ContentType
 from django.utils.html import escape
-from django.utils.text import slugify
 from django.utils.translation import ugettext as _
 from django.conf import settings
 from django.core import validators
@@ -35,6 +34,7 @@ from zerver.lib.cache import (
     user_profile_by_api_key_cache_key,
 )
 from zerver.lib.context_managers import lockfile
+from zerver.lib.email_mirror_helpers import encode_email_address, encode_email_address_helper
 from zerver.lib.emoji import emoji_name_to_emoji_code, get_emoji_file_name
 from zerver.lib.exceptions import StreamDoesNotExistError, \
     StreamWithIDDoesNotExistError
@@ -155,7 +155,6 @@ if settings.BILLING_ENABLED:
 
 import ujson
 import time
-import re
 import datetime
 import os
 import platform
@@ -456,7 +455,7 @@ def notify_created_bot(user_profile: UserProfile) -> None:
     event = created_bot_event(user_profile)
     send_event(user_profile.realm, event, bot_owner_user_ids(user_profile))
 
-def create_users(realm: Realm, name_list: Iterable[Tuple[str, str]], bot_type: int=None) -> None:
+def create_users(realm: Realm, name_list: Iterable[Tuple[str, str]], bot_type: Optional[int]=None) -> None:
     user_set = set()
     for full_name, email in name_list:
         short_name = email_to_username(email)
@@ -2243,6 +2242,7 @@ def check_message(sender: UserProfile, client: Client, addressee: Addressee,
             stream = validate_stream_id_with_pm_notification(stream_id, realm, sender)
         else:
             stream = addressee.stream()
+        assert stream is not None
 
         recipient = get_stream_recipient(stream.id)
 
@@ -2326,8 +2326,10 @@ def _internal_prep_message(realm: Realm,
     # eventually, moving that responsibility to the caller).  If
     # addressee.stream_name() is None (i.e. we're sending to a stream
     # by ID), we skip this, as the stream object must already exist.
-    if addressee.is_stream() and addressee.stream_name() is not None:
-        ensure_stream(realm, addressee.stream_name())
+    if addressee.is_stream():
+        stream_name = addressee.stream_name()
+        if stream_name is not None:
+            ensure_stream(realm, stream_name)
 
     try:
         return check_message(sender, get_client("Internal"), addressee,
@@ -2731,7 +2733,7 @@ def get_last_message_id() -> int:
 SubT = Tuple[List[Tuple[UserProfile, Stream]], List[Tuple[UserProfile, Stream]]]
 def bulk_add_subscriptions(streams: Iterable[Stream],
                            users: Iterable[UserProfile],
-                           color_map: Optional[Dict[str, str]]={},
+                           color_map: Optional[Dict[str, str]]=None,
                            from_stream_creation: bool=False,
                            acting_user: Optional[UserProfile]=None) -> SubT:
     users = list(users)
@@ -2771,7 +2773,7 @@ def bulk_add_subscriptions(streams: Iterable[Stream],
 
     subs_to_add = []  # type: List[Tuple[Subscription, Stream]]
     for (user_profile, recipient_id, stream) in new_subs:
-        if stream.name in color_map:
+        if color_map is not None and stream.name in color_map:
             color = color_map[stream.name]
         else:
             color = pick_color(user_profile, subs_by_user[user_profile.id])
@@ -3545,8 +3547,14 @@ def do_create_realm(string_id: str, name: str,
     realm.save()
 
     # Create stream once Realm object has been saved
-    notifications_stream = ensure_stream(realm, Realm.DEFAULT_NOTIFICATION_STREAM_NAME)
+    notifications_stream = ensure_stream(
+        realm, Realm.DEFAULT_NOTIFICATION_STREAM_NAME,
+        stream_description="Everyone is added to this stream by default. Welcome! :octopus:")
     realm.notifications_stream = notifications_stream
+
+    # With the current initial streams situation, the only public
+    # stream is the notifications_stream.
+    DefaultStream.objects.create(stream=notifications_stream, realm=realm)
 
     signup_notifications_stream = ensure_stream(
         realm, Realm.INITIAL_PRIVATE_STREAM_NAME, invite_only=True,
@@ -3638,25 +3646,6 @@ def lookup_default_stream_groups(default_stream_group_names: List[str],
             raise JsonableError(_('Invalid default stream group %s' % (group_name,)))
         default_stream_groups.append(default_stream_group)
     return default_stream_groups
-
-def set_default_streams(realm: Realm, stream_dict: Dict[str, Dict[str, Any]]) -> None:
-    DefaultStream.objects.filter(realm=realm).delete()
-    stream_names = []
-    for name, options in stream_dict.items():
-        stream_names.append(name)
-        stream = ensure_stream(realm,
-                               name,
-                               invite_only = options.get("invite_only", False),
-                               stream_description = options.get("description", ''))
-        DefaultStream.objects.create(stream=stream, realm=realm)
-
-    # Always include the realm's default notifications streams, if it exists
-    if realm.notifications_stream is not None:
-        DefaultStream.objects.get_or_create(stream=realm.notifications_stream, realm=realm)
-
-    log_event({'type': 'default_streams',
-               'realm': realm.string_id,
-               'streams': stream_names})
 
 def notify_default_streams(realm: Realm) -> None:
     event = dict(
@@ -4249,6 +4238,17 @@ def do_update_message(user_profile: UserProfile, message: Message, topic_name: O
                       propagate_mode: str, content: Optional[str],
                       rendered_content: Optional[str], prior_mention_user_ids: Set[int],
                       mention_user_ids: Set[int]) -> int:
+    """
+    The main function for message editing.  A message edit event can
+    modify:
+    * the message's content (in which case the caller will have
+      set both content and rendered_content),
+    * the topic, in which case the caller will have set topic_name
+    * or both
+
+    With topic edits, propagate_mode determines whether other message
+    also have their topics edited.
+    """
     event = {'type': 'update_message',
              # TODO: We probably want to remove the 'sender' field
              # after confirming it isn't used by any consumers.
@@ -4267,6 +4267,7 @@ def do_update_message(user_profile: UserProfile, message: Message, topic_name: O
     ums = UserMessage.objects.filter(message=message.id)
 
     if content is not None:
+        assert rendered_content is not None
         update_user_message_flags(message, ums)
 
         # One could imagine checking realm.allow_edit_history here and
@@ -4379,14 +4380,15 @@ def do_delete_messages(user_profile: UserProfile, messages: Iterable[Message]) -
 
         event = {
             'type': 'delete_message',
-            'sender': user_profile.email,
+            'sender': message.sender.email,
+            'sender_id': message.sender_id,
             'message_id': message.id,
             'message_type': message_type, }  # type: Dict[str, Any]
         if message_type == "stream":
             event['stream_id'] = message.recipient.type_id
             event['topic'] = message.topic_name()
         else:
-            event['recipient_user_ids'] = message.recipient.type_id
+            event['recipient_id'] = message.recipient_id
 
         # TODO: Each part of the following should be changed to bulk
         # queries, since right now if you delete 1000 messages, you'll
@@ -4445,76 +4447,6 @@ def get_average_weekly_stream_traffic(stream_id: int, stream_date_created: datet
 def is_old_stream(stream_date_created: datetime.datetime) -> bool:
     return (timezone_now() - stream_date_created).days \
         >= STREAM_TRAFFIC_CALCULATION_MIN_AGE_DAYS
-
-def encode_email_address(stream: Stream) -> str:
-    return encode_email_address_helper(stream.name, stream.email_token)
-
-def encode_email_address_helper(name: str, email_token: str) -> str:
-    # Some deployments may not use the email gateway
-    if settings.EMAIL_GATEWAY_PATTERN == '':
-        return ''
-
-    # Given the fact that we have almost no restrictions on stream names and
-    # that what characters are allowed in e-mail addresses is complicated and
-    # dependent on context in the address, we opt for a simple scheme:
-    # 1. Replace all substrings of non-alphanumeric characters with a single hyphen.
-    # 2. Use Django's slugify to convert the resulting name to ascii.
-    # 3. If the resulting name is shorter than the name we got in step 1,
-    # it means some letters can't be reasonably turned to ascii and have to be dropped,
-    # which would mangle the name, so we just skip the name part of the address.
-    name = re.sub(r"\W+", '-', name)
-    slug_name = slugify(name)
-    encoded_name = slug_name if len(slug_name) == len(name) else ''
-
-    # If encoded_name ends up empty, we just skip this part of the address:
-    if encoded_name:
-        encoded_token = "%s+%s" % (encoded_name, email_token)
-    else:
-        encoded_token = email_token
-
-    return settings.EMAIL_GATEWAY_PATTERN % (encoded_token,)
-
-def get_email_gateway_message_string_from_address(address: str) -> Optional[str]:
-    pattern_parts = [re.escape(part) for part in settings.EMAIL_GATEWAY_PATTERN.split('%s')]
-    if settings.EMAIL_GATEWAY_EXTRA_PATTERN_HACK:
-        # Accept mails delivered to any Zulip server
-        pattern_parts[-1] = settings.EMAIL_GATEWAY_EXTRA_PATTERN_HACK
-    match_email_re = re.compile("(.*?)".join(pattern_parts))
-    match = match_email_re.match(address)
-
-    if not match:
-        return None
-
-    msg_string = match.group(1)
-
-    return msg_string
-
-def decode_email_address(email: str) -> Optional[Tuple[str, bool]]:
-    # Perform the reverse of encode_email_address. Returns a tuple of
-    # (email_token, show_sender)
-    msg_string = get_email_gateway_message_string_from_address(email)
-    if msg_string is None:
-        return None
-
-    if msg_string.endswith(('+show-sender', '.show-sender')):
-        show_sender = True
-        msg_string = msg_string[:-12]  # strip "+show-sender"
-    else:
-        show_sender = False
-
-    # Workaround for Google Groups and other programs that don't accept emails
-    # that have + signs in them (see Trac #2102)
-    splitting_char = '.' if '.' in msg_string else '+'
-
-    parts = msg_string.split(splitting_char)
-    # msg_string may have one or two parts:
-    # [stream_name, email_token] or just [email_token]
-    if len(parts) == 1:
-        token = parts[0]
-    else:
-        token = parts[1]
-
-    return token, show_sender
 
 SubHelperT = Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]
 
@@ -5025,6 +4957,10 @@ def do_revoke_multi_use_invite(multiuse_invite: MultiuseInvite) -> None:
     notify_invites_changed(multiuse_invite.referred_by)
 
 def do_resend_user_invite_email(prereg_user: PreregistrationUser) -> int:
+    # These are two structurally for the caller's code path.
+    assert prereg_user.referred_by is not None
+    assert prereg_user.realm is not None
+
     check_invite_limit(prereg_user.referred_by.realm, 1)
 
     prereg_user.invited_at = timezone_now()
@@ -5314,7 +5250,7 @@ def notify_realm_custom_profile_fields(realm: Realm, operation: str) -> None:
 
 def try_add_realm_custom_profile_field(realm: Realm, name: str, field_type: int,
                                        hint: str='',
-                                       field_data: ProfileFieldData=None) -> CustomProfileField:
+                                       field_data: Optional[ProfileFieldData]=None) -> CustomProfileField:
     field = CustomProfileField(realm=realm, name=name, field_type=field_type)
     field.hint = hint
     if field.field_type == CustomProfileField.CHOICE:
@@ -5339,7 +5275,7 @@ def do_remove_realm_custom_profile_fields(realm: Realm) -> None:
 
 def try_update_realm_custom_profile_field(realm: Realm, field: CustomProfileField,
                                           name: str, hint: str='',
-                                          field_data: ProfileFieldData=None) -> None:
+                                          field_data: Optional[ProfileFieldData]=None) -> None:
     field.name = name
     field.hint = hint
     if field.field_type == CustomProfileField.CHOICE:

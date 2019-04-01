@@ -28,19 +28,19 @@ from zerver.views.development.registration import confirmation_key
 
 from zerver.models import (
     get_realm, get_user, get_realm_stream, get_stream_recipient,
-    CustomProfileField, CustomProfileFieldValue, PreregistrationUser,
+    CustomProfileField, CustomProfileFieldValue, DefaultStream, PreregistrationUser,
     Realm, Recipient, Message, ScheduledEmail, UserProfile, UserMessage,
     Stream, Subscription, flush_per_request_caches
 )
 from zerver.lib.actions import (
-    set_default_streams,
     do_change_is_admin,
     get_stream,
     do_create_default_stream_group,
     do_add_default_stream,
     do_create_realm,
 )
-from zerver.lib.send_email import send_email, send_future_email, FromAddress
+from zerver.lib.send_email import send_future_email, FromAddress, \
+    deliver_email
 from zerver.lib.initial_password import initial_password
 from zerver.lib.actions import (
     do_deactivate_realm,
@@ -67,7 +67,7 @@ import re
 import smtplib
 import ujson
 
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 import urllib
 import pytz
@@ -129,12 +129,9 @@ class AddNewUserHistoryTest(ZulipTestCase):
     def test_add_new_user_history_race(self) -> None:
         """Sends a message during user creation"""
         # Create a user who hasn't had historical messages added
-        stream_dict = {
-            "Denmark": {"description": "A Scandinavian country", "invite_only": False},
-            "Verona": {"description": "A city in Italy", "invite_only": False}
-        }  # type: Dict[str, Dict[str, Any]]
         realm = get_realm('zulip')
-        set_default_streams(realm, stream_dict)
+        stream = Stream.objects.get(realm=realm, name='Denmark')
+        DefaultStream.objects.create(stream=stream, realm=realm)
         with patch("zerver.lib.actions.add_new_user_history"):
             self.register(self.nonreg_email('test'), "test")
         user_profile = self.nonreg_user('test')
@@ -446,12 +443,11 @@ class LoginTest(ZulipTestCase):
 
     def test_register(self) -> None:
         realm = get_realm("zulip")
-        stream_dict = {"stream_"+str(i): {"description": "stream_%s_description" % i, "invite_only": False}
-                       for i in range(40)}  # type: Dict[str, Dict[str, Any]]
-        for stream_name in stream_dict.keys():
-            self.make_stream(stream_name, realm=realm)
+        stream_names = ["stream_{}".format(i) for i in range(40)]
+        for stream_name in stream_names:
+            stream = self.make_stream(stream_name, realm=realm)
+            DefaultStream.objects.create(stream=stream, realm=realm)
 
-        set_default_streams(realm, stream_dict)
         # Clear all the caches.
         flush_per_request_caches()
         ContentType.objects.clear_cache()
@@ -1214,11 +1210,17 @@ so we didn't send them an invitation. We did send invitations to everyone else!"
         self.assertEqual(len(email_jobs_to_deliver), 1)
         email_count = len(outbox)
         for job in email_jobs_to_deliver:
-            send_email(**ujson.loads(job.data))
+            deliver_email(job)
         self.assertEqual(len(outbox), email_count + 1)
         self.assertIn(FromAddress.NOREPLY, outbox[-1].from_email)
 
         # Now verify that signing up clears invite_reminder emails
+        with self.settings(EMAIL_BACKEND='django.core.mail.backends.console.EmailBackend'):
+            email = data["email"]
+            send_future_email(
+                "zerver/emails/invitation_reminder", referrer.realm, to_emails=[email],
+                from_address=FromAddress.NOREPLY, context=context)
+
         email_jobs_to_deliver = ScheduledEmail.objects.filter(
             scheduled_timestamp__lte=timezone_now(), type=ScheduledEmail.INVITATION_REMINDER)
         self.assertEqual(len(email_jobs_to_deliver), 1)
@@ -1706,11 +1708,8 @@ class RealmCreationTest(ZulipTestCase):
 
         # Check welcome messages
         for stream_name, text, message_count in [
-                ('announce', 'This is', 1),
-                (Realm.INITIAL_PRIVATE_STREAM_NAME, 'This is', 1),
-                ('general', 'Welcome to', 1),
-                ('new members', 'stream is', 1),
-                ('zulip', 'Here is', 3)]:
+                (Realm.DEFAULT_NOTIFICATION_STREAM_NAME, 'with the topic', 3),
+                (Realm.INITIAL_PRIVATE_STREAM_NAME, 'private stream', 1)]:
             stream = get_stream(stream_name, realm)
             recipient = get_stream_recipient(stream.id)
             messages = Message.objects.filter(recipient=recipient).order_by('pub_date')

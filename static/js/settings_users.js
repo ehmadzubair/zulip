@@ -14,9 +14,9 @@ function get_user_info_row(user_id) {
     return $("tr.user_row[data-user-id='" + user_id + "']");
 }
 
-function update_view_on_deactivate() {
-    var row = meta.current_deactivate_bot_modal_row;
+function update_view_on_deactivate(row) {
     var button = row.find("button.deactivate");
+    button.prop("disabled", false);
     row.find('button.open-user-form').hide();
     button.addClass("btn-warning");
     button.removeClass("btn-danger");
@@ -25,9 +25,16 @@ function update_view_on_deactivate() {
     button.text(i18n.t("Reactivate"));
     row.addClass("deactivated_user");
 }
-function update_view_on_deactivate_reactivate_failure(xhr) {
-    ui_report.generic_row_button_error(xhr, meta.current_bot_element);
 
+function update_view_on_reactivate(row) {
+    var button = row.find("button.reactivate");
+    row.find("button.open-user-form").show();
+    button.addClass("btn-danger");
+    button.removeClass("btn-warning");
+    button.addClass("deactivate");
+    button.removeClass("reactivate");
+    button.text(i18n.t("Deactivate"));
+    row.removeClass("deactivated_user");
 }
 
 function get_status_field() {
@@ -44,18 +51,6 @@ function get_status_field() {
     }
 }
 
-function update_view_on_reactivate() {
-    var row = meta.current_bot_element.closest(".user_row");
-    row.find(".user-admin-settings").show();
-    var button = row.find("button.reactivate");
-    row.find("button.open-user-form").show();
-    button.addClass("btn-danger");
-    button.removeClass("btn-warning");
-    button.addClass("deactivate");
-    button.removeClass("reactivate");
-    button.text(i18n.t("Deactivate"));
-    row.removeClass("deactivated_user");
-}
 
 exports.update_user_data = function (user_id, new_data) {
     if (!meta.loaded) {
@@ -76,10 +71,10 @@ exports.update_user_data = function (user_id, new_data) {
 
     if (new_data.is_active !== undefined) {
         if (new_data.is_active === false) {
-            // Deactivate the bot in the table
+            // Deactivate the user/bot in the table
             update_view_on_deactivate(user_row);
         } else {
-            // Reactivate the bot in the table
+            // Reactivate the user/bot in the table
             update_view_on_reactivate(user_row);
         }
     }
@@ -243,7 +238,8 @@ exports.on_load_success = function (realm_people_data) {
 
     populate_users(realm_people_data);
 
-    // Setup click handlers
+    var modal_elem = $("#deactivation_user_modal").expectOne();
+
     $(".admin_user_table").on("click", ".deactivate", function (e) {
         // This click event must not get propagated to parent container otherwise the modal
         // will not show up because of a call to `close_active_modal` in `settings.js`.
@@ -251,51 +247,38 @@ exports.on_load_success = function (realm_people_data) {
         e.stopPropagation();
 
         var row = $(e.target).closest(".user_row");
-
-        var user_name = row.find('.user_name').text();
-        var email = row.attr("data-email");
-
-        $("#deactivation_user_modal .email").text(email);
-        $("#deactivation_user_modal .user_name").text(user_name);
-        $("#deactivation_user_modal").modal("show");
-
-        meta.current_deactivate_user_modal_row = row;
+        var user_id = row.data('user-id');
+        var user = people.get_person_from_user_id(user_id);
+        modal_elem.find(".email").text(user.email);
+        modal_elem.find(".user_name").text(user.full_name);
+        modal_elem.modal("show");
+        modal_elem.data('user-id', user_id);
     });
 
-    function update_button_on_success() {
-        var button = meta.current_deactivate_user_modal_row.find("button.deactivate");
-        button.prop("disabled", false);
-        button.addClass("btn-warning reactivate").removeClass("btn-danger deactivate");
-        button.text(i18n.t("Reactivate"));
-        meta.current_deactivate_user_modal_row.addClass("deactivated_user");
-        meta.current_deactivate_user_modal_row.find('button.open-user-form').hide();
-        meta.current_deactivate_user_modal_row.find(".user-admin-settings").hide();
-    }
-    function update_button_on_failure() {
-        var button = meta.current_deactivate_user_modal_row.find("button.deactivate");
-        button.text(i18n.t("Deactivate"));
-    }
-
-    $("#do_deactivate_user_button").expectOne().click(function () {
-        var email = meta.current_deactivate_user_modal_row.attr("data-email");
-        var user_id = meta.current_deactivate_user_modal_row.attr("data-user-id");
+    modal_elem.find('.do_deactivate_button').click(function () {
+        var user_id = modal_elem.data('user-id');
+        var row = get_user_info_row(user_id);
+        var email = row.attr("data-email");
 
         if ($("#deactivation_user_modal .email").html() !== email) {
             blueslip.error("User deactivation canceled due to non-matching fields.");
             ui_report.message(i18n.t("Deactivation encountered an error. Please reload and try again."),
                               $("#home-error"), 'alert-error');
         }
-        $("#deactivation_user_modal").modal("hide");
-        meta.current_deactivate_user_modal_row.find("button").eq(0).prop("disabled", true).text(i18n.t("Working…"));
-        var data = {
-        };
+        modal_elem.modal("hide");
+        var row_deactivate_button = row.find("button.deactivate");
+        row_deactivate_button.prop("disabled", true).text(i18n.t("Working…"));
         var opts = {
-            success_continuation: update_button_on_success,
-            error_continuation: update_button_on_failure,
+            success_continuation: function () {
+                update_view_on_deactivate(row);
+            },
+            error_continuation: function () {
+                row_deactivate_button.text(i18n.t("Deactivate"));
+            },
         };
         var status = get_status_field();
         var url = '/json/users/' + encodeURIComponent(user_id);
-        settings_ui.do_settings_change(channel.del, url, data, status, opts);
+        settings_ui.do_settings_change(channel.del, url, {}, status, opts);
 
     });
 
@@ -303,37 +286,44 @@ exports.on_load_success = function (realm_people_data) {
         e.preventDefault();
         e.stopPropagation();
 
-        var row = $(e.target).closest(".user_row");
-        meta.current_deactivate_bot_modal_row = row;
-        meta.current_bot_element = $(e.target);
+        var button_elem = $(e.target);
+        var row = button_elem.closest(".user_row");
         var bot_id = row.attr("data-user-id");
         var url = '/json/bots/' + encodeURIComponent(bot_id);
-        var data = {
-        };
+
         var opts = {
-            success_continuation: update_view_on_deactivate,
-            error_continuation: update_view_on_deactivate_reactivate_failure,
+            success_continuation: function () {
+                update_view_on_deactivate(row);
+            },
+            error_continuation: function (xhr) {
+                ui_report.generic_row_button_error(xhr, button_elem);
+            },
         };
         var status = get_status_field();
-        settings_ui.do_settings_change(channel.del, url, data, status, opts);
+        settings_ui.do_settings_change(channel.del, url, {}, status, opts);
 
     });
 
     $(".admin_user_table, .admin_bot_table").on("click", ".reactivate", function (e) {
         e.preventDefault();
         e.stopPropagation();
-        meta.current_bot_element = $(e.target);
         // Go up the tree until we find the user row, then grab the email element
-        var row = $(e.target).closest(".user_row");
+        var button_elem = $(e.target);
+        var row = button_elem.closest(".user_row");
         var user_id = row.attr("data-user-id");
         var url = '/json/users/' + encodeURIComponent(user_id) + "/reactivate";
         var data = {};
         var status = get_status_field();
 
         var opts = {
-            success_continuation: update_view_on_reactivate,
-            error_continuation: update_view_on_deactivate_reactivate_failure,
+            success_continuation: function () {
+                update_view_on_reactivate(row);
+            },
+            error_continuation: function (xhr) {
+                ui_report.generic_row_button_error(xhr, button_elem);
+            },
         };
+
         settings_ui.do_settings_change(channel.post, url, data, status, opts);
     });
 
